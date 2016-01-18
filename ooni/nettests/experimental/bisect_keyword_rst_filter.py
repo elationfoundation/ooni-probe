@@ -63,6 +63,9 @@ class TermRstFilteringBisect(scapyt.BaseScapyTest):
                  'List of keywords to use for censorship testing']
     requiresRoot = True
     requiresTor = False
+    requiredOptions = ['file']
+    requiredTestHelpers = {'backend': 'tcp-directionality'}
+
 
     def inputProcessor(self, filename):
         # Set max packet size boundry
