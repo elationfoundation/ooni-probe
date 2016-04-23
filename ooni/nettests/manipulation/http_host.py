@@ -21,7 +21,7 @@ class UsageOptions(usage.Options):
     optParameters = [['backend', 'b', None,
                       'URL of the test backend to use. Should be \
                               listening on port 80 and be a \
-                              HTTPReturnJSONHeadersHelper'],
+                        HTTPReturnJSONHeadersHelper (ex. http://1.1.1.1)'],
                      ['content', 'c', None, 'The file to read \
                             from containing the content of a block page']]
 
@@ -50,7 +50,7 @@ class HTTPHost(httpt.HTTPTest):
                  'List of hostnames to test for censorship']
 
     requiredTestHelpers = {'backend': 'http-return-json-headers'}
-    requiredOptions = ['backend']
+    requiredOptions = ['backend', 'file']
     requiresTor = False
     requiresRoot = False
 
@@ -68,14 +68,12 @@ class HTTPHost(httpt.HTTPTest):
         if not body.startswith("{"):
             log.msg("This does not appear to be JSON")
             self.report['transparent_http_proxy'] = True
-            self.check_for_censorship(body)
             return
         try:
             content = json.loads(body)
         except:
             log.msg("The json does not parse, this is not what we expected")
             self.report['transparent_http_proxy'] = True
-            self.check_for_censorship(body)
             return
 
         # We base the determination of the presence of a transparent HTTP

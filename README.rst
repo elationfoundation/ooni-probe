@@ -47,15 +47,6 @@ probe is a liability for you, please be aware of this risk.
 OONI in 5 minutes
 =================
 
-On debian testing or unstable::
-
-    sudo apt-get install ooniprobe
-
-If you are running debian stable you can get it from backports via::
-
-    sudo sh -c 'echo "deb http://http.debian.net/debian jessie-backports main" >> /etc/apt/sources.list'
-    sudo apt-get update && sudo apt-get install ooniprobe
-
 On unix systems::
 
     sudo pip install ooniprobe
@@ -94,29 +85,6 @@ Run this command to automatically update your crontab::
 Installation
 ============
 
-Debian based systems
---------------------
-
-If you are running Debian testing or Debian unstable you can install ooniprobe
-simply with::
-    
-    apt-get install ooniprobe
-
-If you are running Debian stable you can get it from backports via::
-
-    sudo sh -c 'echo "deb http://http.debian.net/debian wheezy-backports main" >> /etc/apt/sources.list'
-    sudo apt-get update && sudo apt-get install ooniprobe
-
-If you are running Ubuntu 14.04 LTS, 14.10 or 15.04 you can install it from the PPA
-(https://launchpad.net/~irl/+archive/ubuntu/ooni/)::
-
-    sudo add-apt-repository ppa:irl/ooni
-    sudo apt-get update && sudo apt-get install ooniprobe
-
-You will be warned that the packages are unauthenticated. This is due to the
-PPA not being signed and is normal behaviour. If you would prefer to verify the
-integrity of the package, use our private Debian repository below.
-
 Mac OS X
 --------
 
@@ -127,7 +95,7 @@ You can install ooniprobe on OSX if you have installed homebrew (http://mxcl.git
 Unix systems (with pip)
 -----------------------
 
-Make sure you have installed the following depedencies:
+Make sure you have installed the following dependencies:
 
   * build-essential
   * python (>=2.7)
@@ -162,6 +130,7 @@ On debian/ubuntu::
 3. Open a Terminal and run::
 
     git clone https://git.torproject.org/ooni-probe.git
+    git clone https://github.com/TheTorProject/ooni-backend.git
     cd ooni-probe/
     vagrant up
 
@@ -173,7 +142,7 @@ ooniprobe will be installed in ``/ooni``.
 
 5. You can run tests with::
 
-    ooniprobe blocking/http_requests -f /ooni/example_inputs/alexa-top-1k.txt
+    ooniprobe blocking/http_requests -f /ooni/var/example_inputs/alexa-top-1k.txt
 
 Using ooniprobe
 ===============
@@ -329,7 +298,7 @@ Download Obfsproxy: https://www.torproject.org/projects/obfsproxy.html.en
 Setting capabilities on your virtualenv python binary
 =====================================================
 
-If your distributation supports capabilities you can avoid needing to run OONI as root::
+If your distribution supports capabilities you can avoid needing to run OONI as root::
 
 
     setcap cap_net_admin,cap_net_raw+eip /path/to/your/virtualenv's/python
@@ -338,7 +307,7 @@ If your distributation supports capabilities you can avoid needing to run OONI a
 Reporting bugs
 ==============
 
-You can report bugs and issues you find with ooni-probe on The Tor Projec issue
+You can report bugs and issues you find with ooni-probe on The Tor Project issue
 tracker filing them under the "Ooni" component: https://trac.torproject.org/projects/tor/newticket?component=Ooni.
 
 You can either register an account or use the group account "cypherpunks" with
@@ -377,11 +346,16 @@ Setting up development environment
 On Debian based systems a development environment can be setup as follows: (prerequisites include build essentials, python-dev, and tor; for tor see https://www.torproject.org/docs/debian.html.en)::
 
 
-    sudo apt-get install python-pip python-virtualenv virtualenv virtualenvwrapper
+    sudo apt-get install python-pip python-virtualenv virtualenv
     sudo apt-get install libgeoip-dev libffi-dev libdumbnet-dev libssl-dev libpcap-dev
     git clone https://github.com/TheTorProject/ooni-probe
     cd ooni-probe
-    mkvirtualenv ooniprobe  # . ~/.virtualenvs/ooniprobe/bin/activate to access later
+    virtualenv venv
+`virtualenv venv` will create a folder in the current directory which will
+contain the Python executable files, and a copy of the pip library which you can
+use to install other packages. To begin using the virtual environment, it needs
+to be activated:
+    source venv/bin/activate
     pip install -r requirements.txt
     pip install -r requirements-dev.txt
     python setup.py install

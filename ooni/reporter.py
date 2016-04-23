@@ -1,3 +1,4 @@
+import uuid
 import yaml
 import json
 import os
@@ -10,11 +11,14 @@ from yaml.representer import SafeRepresenter
 from yaml.emitter import Emitter
 from yaml.serializer import Serializer
 from yaml.resolver import Resolver
+
 from twisted.python.util import untilConcludes
-from twisted.internet import defer
+from twisted.internet import defer, reactor
+from twisted.web.client import Agent
 from twisted.internet.error import ConnectionRefusedError
-from twisted.python.failure import Failure
 from twisted.internet.endpoints import TCP4ClientEndpoint
+
+from txsocksx.http import SOCKS5Agent
 
 from ooni.utils import log
 from ooni.tasks import Measurement
@@ -186,14 +190,16 @@ class YAMLReporter(OReporter):
 
     def writeReportEntry(self, entry):
         log.debug("Writing report with YAML reporter")
-        self._write('---\n')
+        content = '---\n'
         if isinstance(entry, Measurement):
-            self._write(safe_dump(entry.testInstance.report))
-        elif isinstance(entry, Failure):
-            self._write(entry.value)
+            report_entry = entry.testInstance.report
         elif isinstance(entry, dict):
-            self._write(safe_dump(entry))
-        self._write('...\n')
+            report_entry = entry
+        else:
+            raise Exception("Failed to serialise entry")
+        content += safe_dump(report_entry)
+        content += '...\n'
+        self._write(content)
 
     def createReport(self):
         """
@@ -232,6 +238,16 @@ class OONIBReporter(OReporter):
         self.validateCollectorAddress()
 
         self.reportID = None
+        self.supportedFormats = ["yaml"]
+
+        if self.collectorAddress.startswith('https://'):
+            # not sure if there's something else it needs.  Seems to work.
+            # Very difficult to get it to work with self-signed certs.
+            self.agent = Agent(reactor)
+
+        elif self.collectorAddress.startswith('http://'):
+            log.msg("Warning using unencrypted collector")
+            self.agent = Agent(reactor)
 
         OReporter.__init__(self, test_details)
 
@@ -240,40 +256,74 @@ class OONIBReporter(OReporter):
         Will raise :class:ooni.errors.InvalidOONIBCollectorAddress an exception
         if the oonib reporter is not valid.
         """
-        regexp = '^(http|httpo):\/\/[a-zA-Z0-9\-\.]+(:\d+)?$'
+        regexp = '^(http|https|httpo):\/\/[a-zA-Z0-9\-\.]+(:\d+)?$'
         if not re.match(regexp, self.collectorAddress):
             raise errors.InvalidOONIBCollectorAddress
+
+    def serializeEntry(self, entry, serialisation_format="yaml"):
+        if serialisation_format == "json":
+            if isinstance(entry, Measurement):
+                report_entry = {
+                    'input': entry.testInstance.report.pop('input', None),
+                    'id': str(uuid.uuid4()),
+                    'test_start_time': entry.testInstance.report.pop('test_start_time', None),
+                    'measurement_start_time': entry.testInstance.report.pop('measurement_start_time', None),
+                    'test_runtime': entry.testInstance.report.pop('test_runtime', None),
+                    'test_keys': entry.testInstance.report
+                }
+            elif isinstance(entry, dict):
+                report_entry = {
+                    'input': entry.pop('input', None),
+                    'id': str(uuid.uuid4()),
+                    'test_start_time': entry.pop('test_start_time', None),
+                    'measurement_start_time': entry.pop('measurement_start_time', None),
+                    'test_runtime': entry.pop('test_runtime', None),
+                    'test_keys': entry
+                }
+            else:
+                raise Exception("Failed to serialise entry")
+            report_entry.update(self.testDetails)
+            return report_entry
+        else:
+            content = '---\n'
+            if isinstance(entry, Measurement):
+                report_entry = entry.testInstance.report
+            elif isinstance(entry, dict):
+                report_entry = entry
+            else:
+                raise Exception("Failed to serialise entry")
+            content += safe_dump(report_entry)
+            content += '...\n'
+            return content
 
     @defer.inlineCallbacks
     def writeReportEntry(self, entry):
         log.debug("Writing report with OONIB reporter")
-        content = '---\n'
-        if isinstance(entry, Measurement):
-            content += safe_dump(entry.testInstance.report)
-        elif isinstance(entry, Failure):
-            content += entry.value
-        elif isinstance(entry, dict):
-            content += safe_dump(entry)
-        content += '...\n'
 
-        url = self.collectorAddress + '/report'
+        url = self.collectorAddress + '/report/' + self.reportID
 
-        request = {'report_id': self.reportID,
-                   'content': content}
+        if "json" in self.supportedFormats:
+            serialisation_format = 'json'
+        else:
+            serialisation_format = 'yaml'
+
+        request = {
+            'format': serialisation_format,
+            'content': self.serializeEntry(entry, serialisation_format)
+        }
 
         log.debug("Updating report with id %s (%s)" % (self.reportID, url))
         request_json = json.dumps(request)
         log.debug("Sending %s" % request_json)
 
-        bodyProducer = StringProducer(json.dumps(request))
+        bodyProducer = StringProducer(request_json)
 
         try:
-            yield self.agent.request("PUT", url,
+            yield self.agent.request("POST", str(url),
                                      bodyProducer=bodyProducer)
-        except:
-            # XXX we must trap this in the runner and make sure to report the
-            # data later.
+        except Exception as exc:
             log.err("Error in writing report entry")
+            log.exception(exc)
             raise errors.OONIBReportUpdateError
 
     @defer.inlineCallbacks
@@ -287,8 +337,6 @@ class OONIBReporter(OReporter):
         # do this with some deferred kung foo or instantiate the reporter after
         # tor is started.
 
-        from txsocksx.http import SOCKS5Agent
-        from twisted.internet import reactor
 
         if self.collectorAddress.startswith('httpo://'):
             self.collectorAddress = \
@@ -297,34 +345,29 @@ class OONIBReporter(OReporter):
                                                config.tor.socks_port)
             self.agent = SOCKS5Agent(reactor, proxyEndpoint=proxyEndpoint)
 
-        elif self.collectorAddress.startswith('https://'):
-            # XXX add support for securely reporting to HTTPS collectors.
-            log.err("HTTPS based collectors are currently not supported.")
-
         url = self.collectorAddress + '/report'
-
-        content = '---\n'
-        content += safe_dump(self.testDetails)
-        content += '...\n'
 
         request = {
             'software_name': self.testDetails['software_name'],
             'software_version': self.testDetails['software_version'],
             'probe_asn': self.testDetails['probe_asn'],
+            'probe_cc': self.testDetails['probe_cc'],
             'test_name': self.testDetails['test_name'],
             'test_version': self.testDetails['test_version'],
+            'test_start_time': self.testDetails['test_start_time'],
             'input_hashes': self.testDetails['input_hashes'],
-            # XXX there is a bunch of redundancy in the arguments getting sent
-            # to the backend. This may need to get changed in the client and
-            # the backend.
-            'content': content
+            'data_format_version': self.testDetails['data_format_version'],
+            'format': 'json'
         }
+        # import values from the environment
+        request.update([(k.lower(),v) for (k,v) in os.environ.iteritems()
+                        if k.startswith('PROBE_')])
 
         log.msg("Reporting %s" % url)
         request_json = json.dumps(request)
         log.debug("Sending %s" % request_json)
 
-        bodyProducer = StringProducer(json.dumps(request))
+        bodyProducer = StringProducer(request_json)
 
         log.msg("Creating report with OONIB Reporter. Please be patient.")
         log.msg("This may take up to 1-2 minutes...")
@@ -371,6 +414,9 @@ class OONIBReporter(OReporter):
 
         self.reportID = parsed_response['report_id']
         self.backendVersion = parsed_response['backend_version']
+
+        self.supportedFormats = parsed_response.get('supported_formats', ["yaml"])
+
         log.debug("Created report with id %s" % parsed_response['report_id'])
         defer.returnValue(parsed_response['report_id'])
 
@@ -530,7 +576,8 @@ class OONIBReportLog(object):
 class Report(object):
 
     def __init__(self, test_details, report_filename,
-                 reportEntryManager, collector_address=None):
+                 reportEntryManager, collector_address=None,
+                 no_yamloo=False):
         """
         This is an abstraction layer on top of all the configured reporters.
 
@@ -550,14 +597,19 @@ class Report(object):
             collector:
                 The address of the oonib collector for this report.
 
+            no_yamloo:
+                If we should disable reporting to disk.
         """
         self.test_details = test_details
         self.collector_address = collector_address
 
         self.report_log = OONIBReportLog()
 
-        self.yaml_reporter = YAMLReporter(test_details, report_filename=report_filename)
-        self.report_filename = self.yaml_reporter.report_path
+        self.yaml_reporter = None
+        self.report_filename = None
+        if not no_yamloo:
+            self.yaml_reporter = YAMLReporter(test_details, report_filename=report_filename)
+            self.report_filename = self.yaml_reporter.report_path
 
         self.oonib_reporter = None
         if collector_address:
@@ -574,6 +626,8 @@ class Report(object):
                                                    self.collector_address)
 
         def created(report_id):
+            self.reportID = report_id
+            self.test_details['report_id'] = report_id
             if not self.oonib_reporter:
                 return
             return self.report_log.created(self.report_filename,
@@ -603,11 +657,13 @@ class Report(object):
         if self.oonib_reporter:
             deferreds.append(self.open_oonib_reporter())
         else:
-            deferreds.append(self.report_log.not_created(self.report_filename))
+            if self.yaml_reporter:
+                deferreds.append(self.report_log.not_created(self.report_filename))
 
-        yaml_report_created = \
-            defer.maybeDeferred(self.yaml_reporter.createReport)
-        yaml_report_created.addErrback(yaml_report_failed)
+        if self.yaml_reporter:
+            yaml_report_created = \
+                defer.maybeDeferred(self.yaml_reporter.createReport)
+            yaml_report_created.addErrback(yaml_report_failed)
 
         dl = defer.DeferredList(deferreds)
         dl.addCallback(all_reports_openned)
@@ -642,10 +698,11 @@ class Report(object):
             if not d.called:
                 d.callback(None)
 
-        write_yaml_report = ReportEntry(self.yaml_reporter, measurement)
-        self.reportEntryManager.schedule(write_yaml_report)
-        write_yaml_report.done.addErrback(yaml_report_failed)
-        deferreds.append(write_yaml_report.done)
+        if self.yaml_reporter:
+            write_yaml_report = ReportEntry(self.yaml_reporter, measurement)
+            self.reportEntryManager.schedule(write_yaml_report)
+            write_yaml_report.done.addErrback(yaml_report_failed)
+            deferreds.append(write_yaml_report.done)
 
         if self.oonib_reporter:
             write_oonib_report = ReportEntry(self.oonib_reporter, measurement)
@@ -683,9 +740,10 @@ class Report(object):
             if not d.called:
                 d.callback(None)
 
-        close_yaml = defer.maybeDeferred(self.yaml_reporter.finish)
-        close_yaml.addErrback(yaml_report_failed)
-        deferreds.append(close_yaml)
+        if self.yaml_reporter:
+            close_yaml = defer.maybeDeferred(self.yaml_reporter.finish)
+            close_yaml.addErrback(yaml_report_failed)
+            deferreds.append(close_yaml)
 
         if self.oonib_reporter:
             close_oonib = self.oonib_reporter.finish()
